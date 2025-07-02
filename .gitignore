@@ -1,0 +1,7 @@
+node_modules
+dist
+.vscode
+.idea
+.swc
+.env
+@mf-types
