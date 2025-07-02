@@ -2,6 +2,8 @@
 
 This repo contains a playground to reproduce an unexpected behavior in the Module Federation plugin. If a remote manifest cannot be **fetched**, the whole application crashes, **even though** we use an error-boundary or **do not use** that module in our codebase (this project does not import that missing remote and the app still crashes).
 
+[Link to the issue](https://github.com/module-federation/core/issues/3877)
+
 ## How to reproduce
 
 Install the dependencies and start both projects**:**
