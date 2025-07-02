@@ -54,7 +54,8 @@ export default defineConfig({
 		new ModuleFederationPlugin({
 			name: "hostApp",
 			remotes: {
-				"remote-app": "remoteApp@http://localhost:8081/remote-mf-manifest.json"
+				"remote-app": "remoteApp@http://localhost:8081/remote-mf-manifest.json",
+				// "foo": "bar@http://example.org/remote-manifest.json"
 			},
 		}),
 		isDev ? new ReactRefreshRspackPlugin() : null
