@@ -6,6 +6,7 @@ export const RemoteModuleWrapper: FC = () => {
 
     return (
         <section>
+            <h2>Remote animals:</h2>
             <Animals />
         </section>
     );

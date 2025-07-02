@@ -1,7 +1,7 @@
 const animals = ["horse", "sheep", "duck"];
 const Animals = () => {
     return (
-        <ul>
+        <ul style={{backgroundColor: "lightcoral"}}>
             {animals.map((animal) => {
                 return <li key={animal}>{animal}</li>
             })}
