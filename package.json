@@ -1,0 +1,26 @@
+{
+  "name": "mf-offline-remote-e2e-tests",
+  "version": "1.0.0",
+  "description": "E2E tests for Module Federation offline remote handling with Enhanced Offline Fallback Plugin",
+  "scripts": {
+    "setup": "npm install && cd remote-app && npm install && cd ../fallback-remote-app && npm install && cd ../host-app && npm install",
+    "dev:remote": "cd remote-app && npm run dev",
+    "dev:fallback": "cd fallback-remote-app && npm run dev",
+    "dev:host": "cd host-app && npm run dev",
+    "test:install": "playwright install --with-deps",
+    "test:e2e": "playwright test --project=chromium enhanced-plugin-test.spec.ts",
+    "test:e2e:all": "playwright test --project=chromium",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug enhanced-plugin-test.spec.ts",
+    "test:e2e:headed": "playwright test --headed enhanced-plugin-test.spec.ts",
+    "test:verify": "node test-core-functionality.js",
+    "start:all": "concurrently \"npm run dev:remote\" \"npm run dev:fallback\" \"npm run dev:host\"",
+    "clean": "rm -rf node_modules */node_modules test-results playwright-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0",
+    "concurrently": "^8.2.2",
+    "kill-port": "^2.0.1",
+    "typescript": "^5.0.0"
+  }
+}
