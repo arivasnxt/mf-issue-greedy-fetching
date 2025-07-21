@@ -4,17 +4,90 @@
 
 This analysis explains how our solution prevents the crash described in the README when the `foo: "bar@http://example.org/remote-manifest.json"` remote cannot be fetched.
 
-Based on detailed analysis of the Module Federation runtime core (`/Users/bytedance/dev/universe/packages/runtime-core`), here's how runtime hooks and fallbacks work:
+Based on detailed analysis of the Module Federation runtime core source code at `/Users/bytedance/dev/core/packages/runtime-core`, here's how runtime hooks and fallbacks work:
 
 ## Hook System Architecture
 
 The Module Federation runtime uses a sophisticated plugin system built on four main hook types:
+
+```mermaid
+graph TD
+    A[Module Federation Core] --> B[Plugin System]
+    B --> C[Hook Types]
+    
+    C --> D[SyncHook]
+    C --> E[AsyncHook] 
+    C --> F[SyncWaterfallHook]
+    C --> G[AsyncWaterfallHook]
+    
+    D --> D1[Synchronous execution<br/>No data transformation]
+    E --> E1[Asynchronous execution<br/>With abort capability]
+    F --> F1[Synchronous pipeline<br/>Data transformation chain]
+    G --> G1[Asynchronous pipeline<br/>Data transformation chain]
+    
+    B --> H[Core Hook Systems]
+    H --> I[ModuleFederation.hooks<br/>Core lifecycle hooks]
+    H --> J[RemoteHandler.hooks<br/>Remote loading hooks]
+    H --> K[SharedHandler.hooks<br/>Shared dependency hooks]
+    H --> L[loaderHook<br/>Script/Resource loading]
+    H --> M[bridgeHook<br/>Component bridging]
+    
+    style A fill:#e1f5fe
+    style B fill:#f3e5f5
+    style C fill:#fff3e0
+    style H fill:#e8f5e8
+```
 
 ### Hook Types
 1. **SyncHook** - Synchronous execution
 2. **AsyncHook** - Asynchronous execution with abort capability  
 3. **SyncWaterfallHook** - Synchronous data transformation pipeline
 4. **AsyncWaterfallHook** - Asynchronous data transformation pipeline
+
+## Module Federation Core Hook Structure
+
+Based on `/Users/bytedance/dev/core/packages/runtime-core/src/core.ts`, the hook system is organized as follows:
+
+```mermaid
+classDiagram
+    class ModuleFederation {
+        +hooks: PluginSystem
+        +loaderHook: PluginSystem
+        +bridgeHook: PluginSystem
+        +snapshotHandler: SnapshotHandler
+        +remoteHandler: RemoteHandler
+        +sharedHandler: SharedHandler
+    }
+    
+    class PluginSystem {
+        +lifecycle: HooksMap
+        +emit(): any
+        +tap(): void
+    }
+    
+    class RemoteHandler {
+        +hooks: PluginSystem
+        +beforeRequest: AsyncWaterfallHook
+        +onLoad: AsyncHook
+        +errorLoadRemote: AsyncHook ⭐
+        +loadEntry: AsyncHook
+    }
+    
+    class SharedHandler {
+        +hooks: PluginSystem
+        +beforeLoadShare: AsyncHook
+        +afterResolve: AsyncWaterfallHook ⭐
+    }
+    
+    ModuleFederation --> PluginSystem
+    ModuleFederation --> RemoteHandler
+    ModuleFederation --> SharedHandler
+    RemoteHandler --> PluginSystem
+    SharedHandler --> PluginSystem
+    
+    note for RemoteHandler "⭐ Critical for offline handling"
+    note for SharedHandler "⭐ Manifest resolution"
+```
 
 ## Key Runtime Hooks for Remote Loading
 
@@ -35,6 +108,66 @@ errorLoadRemote: new AsyncHook<
   ],
   void | unknown
 >('errorLoadRemote')
+```
+
+## Remote Loading Lifecycle Flow
+
+Based on analysis of `/Users/bytedance/dev/core/packages/runtime-core/src/remote/index.ts`, here's the complete remote loading flow:
+
+```mermaid
+sequenceDiagram
+    participant Host as Host Application
+    participant RH as RemoteHandler
+    participant SH as SnapshotHandler
+    participant SharedH as SharedHandler
+    participant Module as Remote Module
+    participant Network as Network
+
+    Host->>RH: loadRemote(id, options)
+    
+    Note over RH: 1. beforeRequest Hook
+    RH->>RH: beforeRequest hook execution
+    alt Hook Error
+        RH->>RH: errorLoadRemote(lifecycle: 'beforeRequest')
+        Note right of RH: Plugin can return modified args<br/>or alternative configuration
+    end
+    
+    RH->>RH: matchRemoteWithNameAndExpose()
+    RH->>SharedH: afterResolve hook
+    
+    Note over SharedH: 2. Manifest Resolution
+    SharedH->>SH: Load remote snapshot info
+    SH->>Network: Fetch manifest.json
+    alt Network Failure ❌
+        SH-->>SharedH: Manifest fetch failed
+        SharedH->>RH: afterResolve error
+        RH->>RH: errorLoadRemote(lifecycle: 'afterResolve')
+        Note right of RH: ⭐ THIS IS WHERE README ISSUE OCCURS<br/>Plugin must return fallback manifest
+    else Success ✅
+        Network-->>SH: manifest.json
+        SH-->>SharedH: Parsed manifest
+    end
+    
+    SharedH-->>RH: Resolved module info
+    RH->>Module: new Module(moduleOptions)
+    
+    Note over Module: 3. Module Loading
+    RH->>Module: module.get(id, expose, options)
+    Module->>Network: Load module entry
+    alt Module Load Error ❌
+        Module-->>RH: Module load failed
+        RH->>RH: errorLoadRemote(lifecycle: 'onLoad')
+        Note right of RH: Plugin can return fallback component
+    else Success ✅
+        Network-->>Module: Module loaded
+        Module-->>RH: Module factory/component
+    end
+    
+    Note over RH: 4. onLoad Hook
+    RH->>RH: onLoad hook execution
+    RH-->>Host: Final module/component
+    
+    Note over Host: Application continues normally
 ```
 
 ### 2. Lifecycle Stages Where Errors Occur
@@ -58,6 +191,48 @@ errorLoadRemote: new AsyncHook<
 - **Location**: `/packages/runtime-core/src/shared/index.ts:319-325`
 - **Purpose**: When loading shared dependencies fails
 - **Fallback Strategy**: Return alternative shared modules
+
+## Error Handling Flow
+
+The `errorLoadRemote` hook is the cornerstone of error handling in Module Federation. Here's how it works:
+
+```mermaid
+flowchart TD
+    Start([Remote Loading Starts]) --> BeforeReq{beforeRequest Hook}
+    BeforeReq -->|Success| MatchRemote[Match Remote & Expose]
+    BeforeReq -->|Error| ErrBeforeReq[errorLoadRemote<br/>lifecycle: 'beforeRequest']
+    
+    ErrBeforeReq -->|Plugin returns modified args| MatchRemote
+    ErrBeforeReq -->|Plugin returns falsy| Crash1[❌ Application Crash]
+    
+    MatchRemote --> AfterResolve{afterResolve Hook}
+    AfterResolve -->|Success| CreateModule[Create Module Instance]
+    AfterResolve -->|Error<br/>⭐ Manifest Fetch Fails| ErrAfterResolve[errorLoadRemote<br/>lifecycle: 'afterResolve']
+    
+    ErrAfterResolve -->|Plugin returns fallback manifest| CreateModule
+    ErrAfterResolve -->|Plugin returns falsy<br/>⭐ README CRASH POINT| Crash2[❌ Application Crash<br/>🔥 THIS IS THE README ISSUE]
+    
+    CreateModule --> ModuleGet{module.get()}
+    ModuleGet -->|Success| OnLoadHook[onLoad Hook]
+    ModuleGet -->|Error<br/>Module Load Fails| ErrOnLoad[errorLoadRemote<br/>lifecycle: 'onLoad']
+    
+    ErrOnLoad -->|Plugin returns fallback component| OnLoadHook
+    ErrOnLoad -->|Plugin returns falsy| Crash3[❌ Module Load Error]
+    
+    OnLoadHook --> Success([✅ Module Loaded Successfully])
+    
+    style ErrAfterResolve fill:#ffcdd2
+    style Crash2 fill:#f44336,color:#fff
+    style Success fill:#c8e6c9
+    style ErrBeforeReq fill:#fff3e0
+    style ErrOnLoad fill:#fff3e0
+```
+
+### Critical Error Points
+
+1. **beforeRequest Errors** - Rare, usually configuration issues
+2. **afterResolve Errors** - **MOST CRITICAL** - Manifest fetch failures (README issue)
+3. **onLoad Errors** - Module execution failures, can be handled with UI fallbacks
 
 ## How Fallbacks Work
 
@@ -129,6 +304,104 @@ Hooks are executed within specific handlers:
 - **SnapshotHandler** - Manifest loading
 - **Module** - Individual module execution
 
+## Enhanced Offline Fallback Plugin Integration
+
+Our plugin integrates into the Module Federation runtime through strategic hook interception:
+
+```mermaid
+graph TB
+    subgraph "Module Federation Runtime"
+        MF[ModuleFederation Instance]
+        RH[RemoteHandler]
+        SH[SnapshotHandler]
+        SharedH[SharedHandler]
+    end
+    
+    subgraph "Enhanced Offline Fallback Plugin"
+        Plugin[OfflineFallbackPlugin]
+        CB[Circuit Breaker]
+        Cache[Fallback Cache]
+        Retry[Retry Logic]
+        Logger[Error Logger]
+    end
+    
+    subgraph "Hook Integration Points"
+        H1[beforeRequest Hook]
+        H2[afterResolve Hook]
+        H3[onLoad Hook]
+        H4[errorLoadRemote Hook ⭐]
+    end
+    
+    subgraph "Fallback Strategies"
+        F1[Modified Request Args]
+        F2[Alternative Manifest]
+        F3[Fallback Components]
+        F4[Cached Results]
+    end
+    
+    %% Runtime to Hooks
+    RH --> H1
+    SharedH --> H2
+    RH --> H3
+    RH --> H4
+    
+    %% Plugin to Hooks
+    Plugin --> H1
+    Plugin --> H2
+    Plugin --> H3
+    Plugin --> H4
+    
+    %% Plugin Internal Components
+    Plugin --> CB
+    Plugin --> Cache
+    Plugin --> Retry
+    Plugin --> Logger
+    
+    %% Hook to Fallback Strategies
+    H1 --> F1
+    H2 --> F2
+    H3 --> F3
+    H4 --> F4
+    
+    %% Circuit Breaker Integration
+    CB --> F2
+    CB --> F3
+    CB --> F4
+    
+    style H4 fill:#ffcdd2,stroke:#d32f2f
+    style Plugin fill:#e3f2fd,stroke:#1976d2
+    style F2 fill:#fff3e0,stroke:#f57c00
+    style CB fill:#f3e5f5,stroke:#7b1fa2
+```
+
+### Plugin Hook Registration
+
+Based on runtime plugin architecture, our plugin registers as follows:
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant MF as ModuleFederation
+    participant Plugin as OfflineFallbackPlugin
+    participant RH as RemoteHandler
+
+    App->>MF: new ModuleFederation(config)
+    MF->>Plugin: Plugin initialization
+    Plugin->>Plugin: Initialize circuit breaker
+    Plugin->>Plugin: Initialize fallback cache
+    Plugin->>Plugin: Setup retry logic
+    
+    Note over Plugin: Register hook handlers
+    Plugin->>RH: hooks.errorLoadRemote.tap(handler)
+    Plugin->>RH: hooks.beforeRequest.tap(handler) 
+    Plugin->>RH: hooks.onLoad.tap(handler)
+    
+    Note over MF: Runtime ready with fallback protection
+    MF-->>App: Initialization complete
+    
+    Note over App: Application starts normally<br/>Protected against remote failures
+```
+
 ## How Our Plugin Solves the README Problem
 
 ### The Crash Scenario (Without Plugin)
@@ -169,4 +442,34 @@ Hooks are executed within specific handlers:
 - Allows app to continue even with non-existent remotes
 - Maintains functionality of working remotes
 
-This analysis shows our plugin correctly implements the Module Federation runtime hook patterns to solve the exact problem described in the README: preventing application crashes when remote manifests cannot be fetched.
+## Summary: Runtime Hook Architecture Insights
+
+This comprehensive analysis, based on the Module Federation core source code, demonstrates:
+
+### 🔧 **Technical Architecture**
+- **4 Hook Types**: SyncHook, AsyncHook, SyncWaterfallHook, AsyncWaterfallHook
+- **5 Handler Systems**: ModuleFederation, RemoteHandler, SharedHandler, SnapshotHandler, loaderHook
+- **Critical Hook**: `errorLoadRemote` is the primary error handling mechanism
+
+### 🎯 **README Issue Root Cause**  
+- **Exact Location**: `afterResolve` lifecycle in SharedHandler
+- **Trigger**: `shareStrategy: "loaded-first"` causes eager remote fetching
+- **Failure Point**: Manifest fetch to non-existent URL fails
+- **Crash Reason**: No plugin handles `errorLoadRemote(lifecycle: 'afterResolve')`
+
+### ✅ **Our Solution Alignment**
+Our enhanced offline fallback plugin:
+- **Correctly targets** the `errorLoadRemote` hook
+- **Handles all lifecycles** including critical `afterResolve`
+- **Implements proper fallback semantics** (return values vs. throwing)
+- **Adds performance optimizations** (circuit breaker, caching, retry logic)
+- **Provides comprehensive logging** for production debugging
+
+### 🚀 **Production Benefits**
+1. **Prevents crashes** from unreachable remotes
+2. **Maintains application functionality** with working remotes  
+3. **Optimizes performance** through intelligent caching and circuit breaking
+4. **Enables monitoring** through detailed error logging
+5. **Supports development** with clear fallback indicators
+
+This analysis confirms our plugin correctly implements the Module Federation runtime hook patterns to solve the exact problem described in the README: **preventing application crashes when remote manifests cannot be fetched**.
