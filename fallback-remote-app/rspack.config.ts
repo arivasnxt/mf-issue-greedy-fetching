@@ -2,7 +2,6 @@ import { defineConfig } from "@rspack/cli";
 import { rspack } from "@rspack/core";
 import { ReactRefreshRspackPlugin } from "@rspack/plugin-react-refresh";
 import { ModuleFederationPlugin } from "@module-federation/enhanced/rspack";
-import { join } from "node:path";
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -11,16 +10,16 @@ const targets = ["last 2 versions", "> 0.2%", "not dead", "Firefox ESR"];
 
 export default defineConfig({
 	entry: {
-		main: "./src/main.tsx",
+		main: "./src/main.tsx"
 	},
 	resolve: {
-		extensions: ["...", ".ts", ".tsx", ".jsx"],
+		extensions: ["...", ".ts", ".tsx", ".jsx"]
 	},
 	module: {
 		rules: [
 			{
 				test: /\.svg$/,
-				type: "asset",
+				type: "asset"
 			},
 			{
 				test: /\.(jsx?|tsx?)$/,
@@ -31,53 +30,53 @@ export default defineConfig({
 							jsc: {
 								parser: {
 									syntax: "typescript",
-									tsx: true,
+									tsx: true
 								},
 								transform: {
 									react: {
 										runtime: "automatic",
 										development: isDev,
-										refresh: isDev,
-									},
-								},
+										refresh: isDev
+									}
+								}
 							},
-							env: { targets },
-						},
-					},
-				],
-			},
-		],
+							env: { targets }
+						}
+					}
+				]
+			}
+		]
+	},
+	output: {
+		publicPath: "auto"
+	},
+	devServer: {
+		port: 8082,
 	},
 	plugins: [
 		new rspack.HtmlRspackPlugin({
-			template: "./index.html",
+			template: "./index.html"
 		}),
 		new ModuleFederationPlugin({
-			name: "hostApp",
-			// shareStrategy: "loaded-first",
-			remotes: {
-				"remote-app": "remoteApp@http://localhost:8081/remote-mf-manifest.json",
-				foo: "bar@http://example.org/remote-manifest.json",
+			name: "fallbackApp",
+			manifest: {
+				fileName: "fallback-mf-manifest.json"
 			},
-			runtimePlugins: [
-				join(__dirname, "./module-federation-retry-plugin.ts"),
-				join(__dirname, "./fallback-plugin.ts"),
-			],
+			exposes: {
+				"./fallback": "./src/Fallback.tsx"
+			}
 		}),
-		isDev ? new ReactRefreshRspackPlugin() : null,
+		isDev ? new ReactRefreshRspackPlugin() : null
 	].filter(Boolean),
-	output: {
-		publicPath: "auto",
-	},
 	optimization: {
 		minimizer: [
 			new rspack.SwcJsMinimizerRspackPlugin(),
 			new rspack.LightningCssMinimizerRspackPlugin({
-				minimizerOptions: { targets },
-			}),
-		],
+				minimizerOptions: { targets }
+			})
+		]
 	},
 	experiments: {
-		css: true,
-	},
+		css: true
+	}
 });
