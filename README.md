@@ -9,17 +9,17 @@ This repo contains a playground to reproduce an unexpected behavior in the Modul
 Install the dependencies and start both projects**:**
 
 ```sh
-cd remote-app
+cd ./remote-app
 npm install
 npm run dev
 
 # In another terminal
-cd ../host-app
+cd ./fallback-remote-app
 npm install
 npm run dev
 
 # In another terminal
-cd ../host-app
+cd ./host-app
 npm install
 npm run dev
 ```
