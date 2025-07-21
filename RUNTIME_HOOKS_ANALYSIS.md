@@ -261,7 +261,23 @@ flowchart TD
 The critical discovery from the source code analysis:
 - **SnapshotHandler.getManifestJson()** (lines 298-306) calls `errorLoadRemote` with `lifecycle: 'afterResolve'`
 - This happens during manifest fetching when `fetch(manifestUrl)` fails
-- **This is the exact location** where the README issue occurs with `shareStrategy: "loaded-first"`
+- **This crash occurs with BOTH share strategies**: `"loaded-first"` AND `"version-first"`
+
+### Share Strategy Impact on Remote Loading
+
+Both share strategies trigger eager remote loading, causing the same crash scenario:
+
+#### `shareStrategy: "loaded-first"` (README case)
+- Mentioned explicitly in the README as causing the crash
+- Eagerly fetches remote manifests during initialization
+
+#### `shareStrategy: "version-first"` (Same crash risk)
+- **Source**: `/packages/runtime-core/src/shared/index.ts:342-351`
+- Also calls `initRemoteModule(remote.name)` for each remote (line 348)
+- **Same crash potential** when `foo: "bar@http://example.org/remote-manifest.json"` fails
+- Note: The TODO comment (line 341) indicates this strategy may be deprecated
+
+**Both strategies require our enhanced offline fallback plugin** to prevent application crashes from unreachable remotes.
 
 ## How Fallbacks Work
 
@@ -481,9 +497,9 @@ This comprehensive analysis, based on the Module Federation core source code, de
 - **Critical Hook**: `errorLoadRemote` is the primary error handling mechanism
 
 ### 🎯 **README Issue Root Cause**  
-- **Exact Location**: `afterResolve` lifecycle in SharedHandler
-- **Trigger**: `shareStrategy: "loaded-first"` causes eager remote fetching
-- **Failure Point**: Manifest fetch to non-existent URL fails
+- **Exact Location**: `afterResolve` lifecycle called from `SnapshotHandler.getManifestJson()`
+- **Trigger**: BOTH `shareStrategy: "loaded-first"` AND `"version-first"` cause eager remote fetching
+- **Failure Point**: Manifest fetch to non-existent URL fails in `SnapshotHandler`
 - **Crash Reason**: No plugin handles `errorLoadRemote(lifecycle: 'afterResolve')`
 
 ### ✅ **Our Solution Alignment**
