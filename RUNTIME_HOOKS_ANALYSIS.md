@@ -46,7 +46,7 @@ graph TD
 
 ## Module Federation Core Hook Structure
 
-Based on `/Users/bytedance/dev/core/packages/runtime-core/src/core.ts`, the hook system is organized as follows:
+Based on analysis of the actual source code at `/Users/bytedance/dev/core/packages/runtime-core/src/`, here's the accurate hook system organization:
 
 ```mermaid
 classDiagram
@@ -71,22 +71,41 @@ classDiagram
         +onLoad: AsyncHook
         +errorLoadRemote: AsyncHook ⭐
         +loadEntry: AsyncHook
+        +handlePreloadModule: SyncHook
+        +beforePreloadRemote: AsyncHook
+        +generatePreloadAssets: AsyncHook
+    }
+    
+    class SnapshotHandler {
+        +hooks: PluginSystem
+        +beforeLoadRemoteSnapshot: AsyncHook
+        +loadSnapshot: AsyncWaterfallHook
+        +loadRemoteSnapshot: AsyncWaterfallHook
+        +afterLoadSnapshot: AsyncWaterfallHook
+        +manifestCache: Map
+        +getManifestJson() ⭐⭐
     }
     
     class SharedHandler {
         +hooks: PluginSystem
-        +beforeLoadShare: AsyncHook
         +afterResolve: AsyncWaterfallHook ⭐
+        +beforeLoadShare: AsyncWaterfallHook
+        +loadShare: AsyncHook
+        +resolveShare: SyncWaterfallHook
+        +initContainerShareScopeMap: SyncWaterfallHook
     }
     
     ModuleFederation --> PluginSystem
     ModuleFederation --> RemoteHandler
+    ModuleFederation --> SnapshotHandler
     ModuleFederation --> SharedHandler
     RemoteHandler --> PluginSystem
+    SnapshotHandler --> PluginSystem
     SharedHandler --> PluginSystem
     
-    note for RemoteHandler "⭐ Critical for offline handling"
-    note for SharedHandler "⭐ Manifest resolution"
+    note for RemoteHandler "⭐ errorLoadRemote hook"
+    note for SnapshotHandler "⭐⭐ getManifestJson calls errorLoadRemote<br/>THIS IS WHERE README CRASH OCCURS"
+    note for SharedHandler "⭐ afterResolve for remote matching"
 ```
 
 ## Key Runtime Hooks for Remote Loading
@@ -177,9 +196,10 @@ sequenceDiagram
 - **Purpose**: Preprocesses module requests before fetching
 - **Fallback Strategy**: Return modified request args or alternative configuration
 
-#### b) **afterResolve** - Manifest Resolution Stage  
-- **Location**: `/packages/runtime-core/src/plugins/snapshot/SnapshotHandler.ts:298-305`
-- **Purpose**: After manifest is fetched and parsed
+#### b) **afterResolve** - Manifest Resolution Stage ⭐ **CRITICAL** 
+- **Location**: `/packages/runtime-core/src/plugins/snapshot/SnapshotHandler.ts:298-306`
+- **Called from**: `SnapshotHandler.getManifestJson()` during manifest fetch failures
+- **Purpose**: **This is where the README crash occurs** - when manifest.json fetch fails
 - **Fallback Strategy**: Return alternative manifest data or backup entry points
 
 #### c) **onLoad** - Module Loading Stage
@@ -188,8 +208,8 @@ sequenceDiagram
 - **Fallback Strategy**: Return fallback component/module factory
 
 #### d) **beforeLoadShare** - Shared Dependency Loading
-- **Location**: `/packages/runtime-core/src/shared/index.ts:319-325`
-- **Purpose**: When loading shared dependencies fails
+- **Location**: `/packages/runtime-core/src/shared/index.ts:318-325`
+- **Purpose**: When loading shared dependencies fails during remote initialization
 - **Fallback Strategy**: Return alternative shared modules
 
 ## Error Handling Flow
@@ -200,21 +220,21 @@ The `errorLoadRemote` hook is the cornerstone of error handling in Module Federa
 flowchart TD
     Start([Remote Loading Starts]) --> BeforeReq{beforeRequest Hook}
     BeforeReq -->|Success| MatchRemote[Match Remote & Expose]
-    BeforeReq -->|Error| ErrBeforeReq[errorLoadRemote<br/>lifecycle: 'beforeRequest']
+    BeforeReq -->|Error| ErrBeforeReq[errorLoadRemote<br/>lifecycle: beforeRequest]
     
     ErrBeforeReq -->|Plugin returns modified args| MatchRemote
     ErrBeforeReq -->|Plugin returns falsy| Crash1[❌ Application Crash]
     
-    MatchRemote --> AfterResolve{afterResolve Hook}
-    AfterResolve -->|Success| CreateModule[Create Module Instance]
-    AfterResolve -->|Error<br/>⭐ Manifest Fetch Fails| ErrAfterResolve[errorLoadRemote<br/>lifecycle: 'afterResolve']
+    MatchRemote --> ManifestFetch{SnapshotHandler<br/>getManifestJson}
+    ManifestFetch -->|Success| CreateModule[Create Module Instance]
+    ManifestFetch -->|Error ⭐ Manifest Fetch Fails| ErrAfterResolve[errorLoadRemote<br/>lifecycle: afterResolve]
     
     ErrAfterResolve -->|Plugin returns fallback manifest| CreateModule
-    ErrAfterResolve -->|Plugin returns falsy<br/>⭐ README CRASH POINT| Crash2[❌ Application Crash<br/>🔥 THIS IS THE README ISSUE]
+    ErrAfterResolve -->|Plugin returns falsy ⭐ README CRASH POINT| Crash2[❌ Application Crash<br/>🔥 THIS IS THE README ISSUE]
     
-    CreateModule --> ModuleGet{module.get()}
-    ModuleGet -->|Success| OnLoadHook[onLoad Hook]
-    ModuleGet -->|Error<br/>Module Load Fails| ErrOnLoad[errorLoadRemote<br/>lifecycle: 'onLoad']
+    CreateModule --> ModuleLoad{module.get}
+    ModuleLoad -->|Success| OnLoadHook[onLoad Hook]
+    ModuleLoad -->|Error Module Load Fails| ErrOnLoad[errorLoadRemote<br/>lifecycle: onLoad]
     
     ErrOnLoad -->|Plugin returns fallback component| OnLoadHook
     ErrOnLoad -->|Plugin returns falsy| Crash3[❌ Module Load Error]
@@ -226,13 +246,22 @@ flowchart TD
     style Success fill:#c8e6c9
     style ErrBeforeReq fill:#fff3e0
     style ErrOnLoad fill:#fff3e0
+    style ManifestFetch fill:#e1f5fe
 ```
 
 ### Critical Error Points
 
-1. **beforeRequest Errors** - Rare, usually configuration issues
-2. **afterResolve Errors** - **MOST CRITICAL** - Manifest fetch failures (README issue)
-3. **onLoad Errors** - Module execution failures, can be handled with UI fallbacks
+1. **beforeRequest Errors** - Rare, usually configuration issues during remote matching
+2. **afterResolve Errors** - **🔥 MOST CRITICAL** - Called from `SnapshotHandler.getManifestJson()` when manifest fetch fails (README issue location)
+3. **onLoad Errors** - Module execution failures, can be handled with UI fallbacks  
+4. **beforeLoadShare Errors** - Shared dependency loading failures during remote init
+
+### Key Finding: SnapshotHandler Calls errorLoadRemote
+
+The critical discovery from the source code analysis:
+- **SnapshotHandler.getManifestJson()** (lines 298-306) calls `errorLoadRemote` with `lifecycle: 'afterResolve'`
+- This happens during manifest fetching when `fetch(manifestUrl)` fails
+- **This is the exact location** where the README issue occurs with `shareStrategy: "loaded-first"`
 
 ## How Fallbacks Work
 
