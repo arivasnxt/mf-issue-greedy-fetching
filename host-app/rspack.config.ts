@@ -54,18 +54,26 @@ export default defineConfig({
 		}),
 		new ModuleFederationPlugin({
 			name: "hostApp",
-			// shareStrategy: "loaded-first",
+			shareStrategy: "loaded-first",
 			remotes: {
 				"remote-app": "remoteApp@http://localhost:8081/remote-mf-manifest.json",
 				foo: "bar@http://example.org/remote-manifest.json",
 			},
 			runtimePlugins: [
-				join(__dirname, "./module-federation-retry-plugin.ts"),
-				join(__dirname, "./fallback-plugin.ts"),
+				join(__dirname, "./enhanced-offline-fallback-plugin.ts"),
 			],
 		}),
 		isDev ? new ReactRefreshRspackPlugin() : null,
 	].filter(Boolean),
+	devServer: {
+		port: 8080,
+		headers: {
+			'Access-Control-Allow-Origin': '*',
+			'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, OPTIONS',
+			'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+			'Access-Control-Allow-Credentials': 'true'
+		},
+	},
 	output: {
 		publicPath: "auto",
 	},
