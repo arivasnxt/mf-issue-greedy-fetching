@@ -142,6 +142,7 @@ const enhancedOfflineFallbackPlugin = (
     const fallbackModule = {
       __esModule: true,
       default: FallbackComponent,
+      isFallback: true,
       // Provide common export patterns
       [remoteId]: FallbackComponent,
     };
@@ -203,7 +204,8 @@ const enhancedOfflineFallbackPlugin = (
 
     // Handle module loading errors
     async errorLoadRemote(args) {
-      const { id, error, from, lifecycle } = args;
+      const { id, error:_error, from, lifecycle } = args;
+      const error = _error as Error;
       const remoteId = id || from || 'unknown';
       
       log(`Remote loading failed: ${remoteId}`, {
@@ -215,7 +217,7 @@ const enhancedOfflineFallbackPlugin = (
       // Different handling based on lifecycle
       switch (lifecycle) {
         case 'beforeRequest':
-        case 'loadEntry':
+        case 'afterResolve':
           // Manifest loading failed - try with retry
           try {
             // Don't retry if circuit is open
